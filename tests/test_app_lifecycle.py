@@ -1,7 +1,7 @@
 import urllib.request
 from io import BytesIO
 from types import SimpleNamespace
-from http.client import HTTPMessage
+from http.client import HTTPMessage, HTTPResponse
 from unittest.mock import MagicMock, call
 
 import numpy as np
@@ -143,6 +143,30 @@ def test_request_stop_current_app_returns_false_on_other_httperror(
 
     assert not app_lifecycle.request_stop_current_app(robot, logger)
     logger.error.assert_called_once()
+
+
+def test_request_stop_current_app_returns_false_on_truncated_error_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A truncated error body remains a logged failure so local shutdown can continue."""
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> None:
+        connection = MagicMock()
+        connection.makefile.return_value = BytesIO(
+            b'HTTP/1.1 400 Bad Request\r\nContent-Length: 100\r\n\r\n{"detail":'
+        )
+        response = HTTPResponse(connection)
+        response.begin()
+        raise daemon_api.urllib.error.HTTPError(request.full_url, 400, "Bad Request", HTTPMessage(), response)
+
+    monkeypatch.setattr(daemon_api.urllib.request, "urlopen", fake_urlopen)
+    robot = SimpleNamespace(client=SimpleNamespace(host="192.168.1.42", port=8000))
+    logger = MagicMock()
+
+    assert not app_lifecycle.request_stop_current_app(robot, logger)
+    logger.error.assert_called_once()
+    error = logger.error.call_args.args[1]
+    assert isinstance(error, daemon_api.DaemonApiError)
+    assert error.status_code == 400
+    assert error.detail is None
 
 
 def test_wake_up_if_sleeping_handles_pose_read_failure() -> None:

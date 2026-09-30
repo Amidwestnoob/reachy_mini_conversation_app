@@ -8,6 +8,7 @@ import json
 import urllib.error
 import urllib.request
 from typing import Any
+from http.client import IncompleteRead
 
 from reachy_mini import ReachyMini
 
@@ -53,7 +54,7 @@ def daemon_request(
             with e:
                 error_body = e.read()
             error_response: object = json.loads(error_body) if error_body else None
-        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as body_error:
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError, IncompleteRead) as body_error:
             raise DaemonApiError(f"{message}; could not read error detail: {body_error}", status_code=e.code) from e
         detail = error_response.get("detail") if isinstance(error_response, dict) else None
         if not isinstance(detail, str):
