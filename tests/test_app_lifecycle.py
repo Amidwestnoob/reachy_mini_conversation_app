@@ -1,4 +1,7 @@
+import urllib.request
+from io import BytesIO
 from types import SimpleNamespace
+from http.client import HTTPMessage
 from unittest.mock import MagicMock, call
 
 import numpy as np
@@ -89,17 +92,16 @@ def test_request_stop_current_app_returns_false_on_urlerror(monkeypatch) -> None
     assert not app_lifecycle.request_stop_current_app(robot, MagicMock())
 
 
-@pytest.mark.parametrize("status_code", [400, 409])
-def test_request_stop_current_app_treats_already_stopping_as_success(monkeypatch, status_code: int) -> None:
-    """HTTP 400/409 from an already-stopping app is idempotent success."""
+def test_request_stop_current_app_treats_already_stopping_as_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The daemon's stopped-or-stopping response is idempotent success."""
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> None:
         raise daemon_api.urllib.error.HTTPError(
             request.full_url,
-            status_code,
-            "Already stopping",
-            hdrs=None,  # type: ignore[arg-type]
-            fp=None,
+            400,
+            "Bad Request",
+            hdrs=HTTPMessage(),
+            fp=BytesIO(b'{"detail":"No app is currently running"}'),
         )
 
     monkeypatch.setattr(daemon_api.urllib.request, "urlopen", fake_urlopen)
@@ -110,22 +112,37 @@ def test_request_stop_current_app_treats_already_stopping_as_success(monkeypatch
     logger.error.assert_not_called()
 
 
-def test_request_stop_current_app_returns_false_on_other_httperror(monkeypatch) -> None:
-    """Unexpected HTTP failures remain errors."""
+@pytest.mark.parametrize(
+    ("status_code", "body"),
+    [
+        (400, b'{"detail":"Stop cleanup failed"}'),
+        (400, b""),
+        (400, b"<html>Bad Request</html>"),
+        (400, b'{"detail":["No app is currently running"]}'),
+        (409, b'{"detail":"No app is currently running"}'),
+        (500, b'{"detail":"No app is currently running"}'),
+    ],
+)
+def test_request_stop_current_app_returns_false_on_other_httperror(
+    monkeypatch: pytest.MonkeyPatch, status_code: int, body: bytes
+) -> None:
+    """Only the verified daemon response is accepted without an error log."""
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> None:
         raise daemon_api.urllib.error.HTTPError(
             request.full_url,
-            500,
-            "Server Error",
-            hdrs=None,  # type: ignore[arg-type]
-            fp=None,
+            status_code,
+            "Request failed",
+            hdrs=HTTPMessage(),
+            fp=BytesIO(body),
         )
 
     monkeypatch.setattr(daemon_api.urllib.request, "urlopen", fake_urlopen)
     robot = SimpleNamespace(client=SimpleNamespace(host="192.168.1.42", port=8000))
+    logger = MagicMock()
 
-    assert not app_lifecycle.request_stop_current_app(robot, MagicMock())
+    assert not app_lifecycle.request_stop_current_app(robot, logger)
+    logger.error.assert_called_once()
 
 
 def test_wake_up_if_sleeping_handles_pose_read_failure() -> None:

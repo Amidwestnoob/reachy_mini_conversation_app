@@ -69,9 +69,6 @@ def initialize_tools_with_default_fallback(
         return selected_profile
 
 
-_ALREADY_STOPPING_HTTP_CODES = frozenset({400, 409})
-
-
 def request_stop_current_app(robot: ReachyMini, logger: logging.Logger) -> bool:
     """Request the Reachy Mini daemon to stop the current app."""
     try:
@@ -82,10 +79,10 @@ def request_stop_current_app(robot: ReachyMini, logger: logging.Logger) -> bool:
             timeout_s=_STOP_CURRENT_APP_TIMEOUT_S,
         )
     except DaemonApiError as e:
-        # Another shutdown path may already have moved the app to STOPPING.
-        if e.status_code in _ALREADY_STOPPING_HTTP_CODES:
+        # The daemon uses this detail for STOPPING, DONE, and no current app.
+        if e.status_code == 400 and e.detail == "No app is currently running":
             logger.info(
-                "Current app stop via %s already in progress (HTTP %s)",
+                "Current app via %s is already stopped or stopping (HTTP %s)",
                 _STOP_CURRENT_APP_PATH,
                 e.status_code,
             )
